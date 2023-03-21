@@ -6,19 +6,34 @@ library(ggbeeswarm)
 library(ggrepel)
 #library(ensimplR)
 library(plotly)
+library(ggh4x)
+library(ggpubr)
+
 
 protein_all_tissues_plotting_dat <- read.csv("./data/protein_all_tissues_plotting.csv", header = TRUE) %>%
   mutate(mouse.id = factor(mouse.id),Sex = factor(Sex, levels = c("M", "F")), Age = factor(Age, levels = c("Y", "O")))
 
 protein_all_tissues_plotting_dat$Age = plyr::revalue(protein_all_tissues_plotting_dat$Age, c("O" = "Old","Y" = "Young"))
 protein_all_tissues_plotting_dat$Sex = plyr::revalue(protein_all_tissues_plotting_dat$Sex, c("M" = "Male","F" = "Female"))
+
+protein_all_tissues_plotting_dat <- protein_all_tissues_plotting_dat %>%
+										    mutate(Age = factor(ifelse(Age == "Young", 8, 18), levels = c("8", "18")),
+													Sex = factor(Sex, levels = c("Male", "Female")))
   
 ## Read in tissue-specific results and Convert to long data frame 
 tissue_specific_results <- readRDS("./data/tissue_specific_results.rds")
 tissue_specific_results_long <- plyr::ldply(tissue_specific_results, data.frame) %>%
   dplyr::select(-.id) %>% group_by(tissue) %>%
   mutate(sex_qval = p.adjust(sex_pval, method = "BH"),
-         age_qval = p.adjust(age_pval, method = "BH"))
+         age_qval = p.adjust(age_pval, method = "BH")) %>%
+  mutate(age_sig = case_when(age_qval < 0.1 & age_effect < 0 ~ "Decrease with age",
+                             age_qval < 0.1 & age_effect > 0 ~ "Increase with age",
+                             age_qval > 0 ~ "Not sig")) %>%
+  mutate(age_sig = factor(age_sig, levels = c("Increase with age", "Decrease with age", "Not sig"))) %>%
+  mutate(sex_sig = case_when(sex_qval < 0.1 & sex_effect < 0 ~ "Greater in males",
+                             sex_qval < 0.1 & sex_effect > 0 ~ "Greater in females",
+                             sex_qval > 0 ~ "Not sig")) %>%
+  mutate(sex_sig = factor(sex_sig, levels = c("Greater in females", "Greater in males", "Not sig"))) 
 
 ## GO gene sets		 
 gene_sets_dat <- readRDS("./data/all_gene_sets.RDS")
@@ -36,7 +51,6 @@ protein_to_symbol <- do.call("rbind", tissue_specific_results) %>%
   distinct
 
   
-
 		 
 ### 1. Sex & Age effect function for Box plots
 
@@ -44,15 +58,17 @@ protein_to_symbol <- do.call("rbind", tissue_specific_results) %>%
 Sex_Age_Effect_1 <- function(pdata = NULL) {
   
   # Plot sex_age effects in all tissues
-  S_A_plot = ggplot(data = pdata, aes(y = Intensity, x = Sex)) +
-    geom_boxplot(aes(fill=Age),alpha = 0,outlier.shape = NA) +			### aes(fill=Age),  alpha = 0,
+  S_A_plot = ggplot(data = pdata,aes(y = Intensity, x = Age, fill = Sex, col = Sex)) +
+    geom_boxplot(aes(col = Sex), alpha = 0, outlier.shape = NA) +			### aes(fill=Age),  alpha = 0,
     #geom_jitter(col = "gray") +
-    geom_point(aes(color=Age),position=position_jitterdodge())+		### aes(group=Age),
-    facet_grid(toupper(symbol)~tissue,scales = "free_x")+
-	#facet_wrap(toupper(symbol)	~tissue,ncol=5)+			### toupper(symbol)
-	scale_x_discrete(drop = FALSE)+
-	#theme(text=element_text(size=21))+
-	#theme(strip.text.x = element_text(size = 30)) +
+    geom_point(col = "black", position = position_jitterdodge(jitter.width = 0.1, jitter.height = 0.1)) +		### aes(group=Age),
+    facet_grid(toupper(symbol)~tissue, scales = "free_x") +
+	  #facet_wrap(toupper(symbol)	~tissue,ncol=5)+			### toupper(symbol)
+	  scale_x_discrete(drop = FALSE)+
+    scale_color_manual(values = c("deeppink3", "cyan3")) +
+    xlab("Age (months)") + ylab("Abundance") +
+	  #theme(text=element_text(size=21))+
+	  #theme(strip.text.x = element_text(size = 30)) +
     theme_bw()
 	
   #ggplotly(S_A_plot) 
@@ -61,45 +77,74 @@ Sex_Age_Effect_1 <- function(pdata = NULL) {
      
 }
 
-Sex_Age_Effect_2 <- function(pdata = NULL, type="SA") {
+Sex_Age_Effect_2 <- function(pdata = NULL, sdata = NULL, type="SA") {
+  
+  #pdata <- pdata %>%
+  #  mutate(Sex = factor(ifelse(Sex == "Male", "Male", "Female"), levels = c("Male", "Female")),
+  #         Age = factor(ifelse(Age == "Old", "18", "8"), levels = c("8", "18")))
+	
+  if(type == "age"){
+    pdata <- left_join(pdata,
+                       sdata %>%
+                         dplyr::select(protein.id, age_sig))
+    
+    S_A_plot = ggplot(data = pdata, 
+                      aes(y = Intensity, x = Age, col = age_sig)) +
+      geom_boxplot(outlier.shape = NA,  size = 0.75) +			### aes(fill=Age),  alpha = 0,
+      #geom_jitter(col = "gray") +
+      geom_point(col = "black", position = position_jitter(width = 0.1, height = 0.1)) +		### aes(group=Age),
+      facet_grid(toupper(symbol) ~ tissue, scales = "free_x")+
+      scale_x_discrete(drop = FALSE) +
+      scale_color_manual("Age effect\n(FDR < 0.1):", values = c("seagreen4", "seagreen1", "gray"), drop = FALSE) +
+      xlab("Age (months)") + ylab("Abundance") +
+      theme_bw()		
+  }
+  
+	if(type == "sex"){
+	  pdata <- left_join(pdata,
+	                     sdata %>%
+	                       dplyr::select(protein.id, sex_sig))
+	  
+		S_A_plot = ggplot(data = pdata, 
+		                  aes(y = Intensity, x = Sex, col = sex_sig)) +
+		  geom_boxplot(outlier.shape = NA,  size = 0.75) +			### aes(fill=Age),  alpha = 0,
+		  #geom_jitter(col = "gray") +
+		  geom_point(col = "black", position = position_jitter(width = 0.1, height = 0.1)) +		### aes(group=Age),
+		  facet_grid(toupper(symbol) ~ tissue,scales = "free_x")+
+		  scale_x_discrete(drop = FALSE) +
+		  scale_color_manual("Sex effect\n(FDR < 0.1):", values = c("orchid4", "orchid1", "gray"), drop = FALSE) +
+		  xlab("Sex") + ylab("Abundance") +
+		  theme_bw()		
+	}
   
   # Plot sex_age effects in all tissues
-  if(type=="SA"){
-	  S_A_plot = ggplot(data = pdata, aes(y = Intensity, x = Sex)) +
-		geom_boxplot(aes(fill=Age),alpha = 0,outlier.shape = NA) +			### aes(fill=Age),  alpha = 0,
-		#geom_jitter(col = "gray") +
-		geom_point(aes(color=Age),position=position_jitterdodge())+		### aes(group=Age),
-		facet_grid(toupper(symbol)~tissue,scales = "free_x")+
-		#facet_wrap(toupper(symbol)	~tissue,ncol=5)+			### toupper(symbol)
-		scale_x_discrete(drop = FALSE)+
-		#theme(text=element_text(size=21))+
-		#theme(strip.text.x = element_text(size = 30)) +
-		theme_bw()
-	}
-	
-	if(type =="sex"){
-		S_A_plot = ggplot(data = pdata, aes(y = Intensity, x = Sex)) +
-		geom_boxplot(alpha = 0,outlier.shape = NA) +			### aes(fill=Age),  alpha = 0,
-		#geom_jitter(col = "gray") +
-		geom_point(aes(color=Sex),position=position_jitterdodge())+		### aes(group=Age),
-		facet_grid(toupper(symbol)~tissue,scales = "free_x")+
-		scale_x_discrete(drop = FALSE)+
-		theme_bw()		
-	}
-	
-	if(type =="age"){
-		S_A_plot = ggplot(data = pdata, aes(y = Intensity, x = Age)) +
-		geom_boxplot(alpha = 0,outlier.shape = NA) +			### aes(fill=Age),  alpha = 0,
-		#geom_jitter(col = "gray") +
-		geom_point(aes(color=Age),position=position_jitterdodge())+		### aes(group=Age),
-		facet_grid(toupper(symbol)~tissue,scales = "free_x")+
-		scale_x_discrete(drop = FALSE)+
-		theme_bw()		
-	}
+  if(type == "SA"){
+    pdata <- left_join(pdata,
+                       sdata %>%
+                         dplyr::select(protein.id, sex_by_age_pval))
+    pdata <- pdata %>%
+                    mutate(sex_by_age_sig = ifelse(sex_by_age_pval < 0.05, "Sig", "Not sig")) %>%
+                    mutate(sex_by_age_sig = factor(sex_by_age_sig, levels = c("Sig", "Not sig"))) %>%
+                    mutate(Sex_by_interaction = Sex:sex_by_age_sig) %>%
+                    mutate(Sex_by_interaction = factor(Sex_by_interaction, levels = c("Male:Not sig", "Female:Not sig", "Male:Sig", "Female:Sig"))) 
+                      	
+	S_A_plot = ggplot(data = pdata, aes(y = Intensity, x = Age,fill=Sex,col = Sex_by_interaction)) +
+      geom_boxplot(alpha = 0, outlier.shape = NA, size = 0.75) +			### aes(fill=Age),  alpha = 0,
+      #geom_point(col = "black", position = position_jitterdodge(jitter.width = 0.1, jitter.height = 0.1)) +		### aes(group=Age),
+      geom_point(color="black", position = position_jitterdodge()) +		### aes(group=Age),
+      facet_nested(toupper(symbol)~tissue+Sex, scales = "free_x")+
+	  #facet_wrap(toupper(symbol)	~tissue,ncol=5)+			### toupper(symbol)
+      scale_x_discrete(drop = FALSE) +
+      scale_color_manual("Age-by-sex interaction\n(p-value < 0.05):", values = c("gray", "gray", "deeppink3", "cyan3"), drop = FALSE) +
+      scale_shape_manual(values = c(19, 19), drop = FALSE) +
+      guides(shape = "none", fill = "none") +
+      xlab("Age (months)") + ylab("Abundance") +
+      #theme(text=element_text(size=21))+
+      #theme(strip.text.x = element_text(size = 30)) +
+      theme_bw()
+  }
 
-	
   return(list(S_A_plot = S_A_plot))
-     
 }
 
 ####### Function to capitalize first letter of word

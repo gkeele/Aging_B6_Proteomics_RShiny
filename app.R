@@ -17,6 +17,7 @@ library(dplyr)
 library(stringi)
 library(ggrepel)
 library(gplots)
+library(shinyalert)
 #library(ggplot2)
 
 
@@ -39,14 +40,14 @@ ui <- navbarPage(strong("Aging B6 Proteomics"),		# Application title
                                           
                                           actionButton("geneeffect", "Query"),
                                           h6("Note: Click for sample details in the plot",style = "color:blue"),
-                                          hr()
+										  hr()
                              ),
                              
                              # Show plots from analysis    character(0)
                              
                              mainPanel(
                                h3("Box plots of Sex-Age effects for protein(s) in query"),
-                               plotOutput("PBoxPlot",click = "plot_click",width = "105%",height = "auto"),
+                               plotOutput("PBoxPlot",click = "plot_click",width = "120%",height = "auto"),
                                #plotlyOutput("PBoxPlot",width = "auto",height = "auto"),
                                fluidRow(
                                  column(dataTableOutput("click_info"), width = 12)
@@ -163,7 +164,9 @@ ui <- navbarPage(strong("Aging B6 Proteomics"),		# Application title
                                #)
                              )
                            )
-                 )
+                 ),
+				 
+				 tabPanel(downloadButton("downloadData", "Download All Data", style = "color: #fff; background-color: #27ae60; border-color: #fff;margin-top:-30px;margin-bottom: 0px"))
                  
                  
 )
@@ -171,7 +174,17 @@ ui <- navbarPage(strong("Aging B6 Proteomics"),		# Application title
 # Define server
 server <- function(input, output, session) {
   
-  
+  # Downloadable csv of selected dataset ----
+  output$downloadData <- downloadHandler(
+    filename = function() {
+      paste("protein_all_data", ".zip", sep = "")
+    },
+    content = function(file) {
+      #write.csv(protein_all_tissues_plotting_dat, file, row.names = FALSE)
+	  file.copy("./data/protein_all_data.zip", file)
+    }
+  )
+    
   updateSelectizeInput(session, 'Pset2',
                        choices = c(unique(gene_sets_dat$gs_name)),
                        selected = character(0),
@@ -183,15 +196,20 @@ server <- function(input, output, session) {
     Pname <- (unlist(strsplit(input$Pname, ","))) 
     if (input$checkbox1 == 1) {PD = subset(protein_all_tissues_plotting_dat,gene.id %in% stri_trans_toupper(Pname))}				### type==1: Ensembl ID
     if (input$checkbox1 == 2) {PD = subset(protein_all_tissues_plotting_dat,symbol %in% stri_trans_totitle(stri_trans_tolower(Pname)))}	
-    return(PD)
+    if(nrow(PD)==0){
+      shinyalert("Oops!", "No such gene", type = "error")
+      PD <- NULL
+    }	
+	return(PD)
   })
   
   D = reactive({
-    
+    req(PD_S())
     PD <- PD_S()	
     if (is.null(input$plot_click)) return()
     PD$symbol <- toupper(PD$symbol)
-    PDT = subset(PD,tissue == input$plot_click$panelvar1 & symbol == input$plot_click$panelvar2)
+    if(input$boxT=='SA'){PDT = subset(PD,tissue == input$plot_click$panelvar2 & symbol == input$plot_click$panelvar3)}
+	if(input$boxT!='SA'){PDT = subset(PD,tissue == input$plot_click$panelvar1 & symbol == input$plot_click$panelvar2)}
     
     DTE <- nearPoints(PDT, input$plot_click,allRows = T,addDist = TRUE)  ##nearCountry <- nearPoints(plotData(), input$plot_click, x='Sex', y='Intensity',maxpoints = 1)
     DTE = subset(DTE, dist_ < 30)
@@ -201,8 +219,9 @@ server <- function(input, output, session) {
   # ,"Sex","Intensity"
   
   observeEvent(input$geneeffect, {
-    PD <- PD_S()
-    dd <- Sex_Age_Effect_2(PD,input$boxT)
+    req(PD_S())
+	PD <- PD_S()
+    dd <- Sex_Age_Effect_2(PD,tissue_specific_results_long,input$boxT)
     #dd <- Sex_Age_Effect(protein_all_tissues_plotting_dat, input$Pname, input$checkbox1)
     #output$PBoxPlot <- renderPlotly(dd$S_A_plot) 
     number_of_plot <- length(unique(PD$tissue))
@@ -220,7 +239,8 @@ server <- function(input, output, session) {
   
   observeEvent(input$plot_click, 
                {
-                 PD <- PD_S()
+                 req(PD_S())
+				 PD <- PD_S()
                  DD <- D()
                  PD$Psymbol <- toupper(PD$symbol) 
                  output$click_info <- DT::renderDataTable(
@@ -404,7 +424,7 @@ server <- function(input, output, session) {
                                                            "heart", "skeletal muscle", "striatum", "cerebellum", "hippocampus"))))
     #tissue_specific_results_dat = tissue_specific_results_dat[!is.na(tissue_specific_results_dat$symbol),]
     #tissue_specific_results_dat$symbol = toupper(tissue_specific_results_dat$symbol)  ### revise 1: symbol  
-    if (input$group2 == "Sex") {
+	if (input$group2 == "Sex") {
       # Sex effect matrix     revise 2: protein.id to symbol
       full_sex_effect_mat <- tissue_specific_results_dat %>%
         dplyr::select(tissue, protein.id, sex_effect) %>%
@@ -445,7 +465,7 @@ server <- function(input, output, session) {
               axis.text.x = element_blank(),
               axis.ticks.x = element_blank(),
               axis.ticks.y = element_blank())
-      
+
     }
     
     if (input$group2 == "Age") {
